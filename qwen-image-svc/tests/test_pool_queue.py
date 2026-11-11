@@ -79,10 +79,28 @@ def test_second_submit_queues_instead_of_429(one_gpu_pool):
     pool.submit(_task())  # must queue, not raise
 
 
-def test_submit_rejects_only_when_queue_depth_exceeded(one_gpu_pool):
+def test_submit_rejects_only_when_queue_depth_exceeded(one_gpu_pool, monkeypatch):
+    monkeypatch.setattr("pool.SLOT_WAIT_SECONDS", 0.05)
     pool = one_gpu_pool
     for _ in range(QUEUE_SLOTS_PER_OP):
         pool.submit(_task())
 
     with pytest.raises(QueueFull):
         pool.submit(_task())
+
+
+def test_full_queue_accepts_if_a_slot_frees_within_the_wait(one_gpu_pool, monkeypatch):
+    monkeypatch.setattr("pool.SLOT_WAIT_SECONDS", 2.0)
+    pool = one_gpu_pool
+    for _ in range(QUEUE_SLOTS_PER_OP):
+        pool.submit(_task())
+
+    def _free_one():
+        time.sleep(0.1)
+        queue = pool._task_q["t2i"]
+        with queue._lock:
+            queue._items.pop()
+        pool._slots["t2i"].release()
+
+    threading.Thread(target=_free_one).start()
+    pool.submit(_task())

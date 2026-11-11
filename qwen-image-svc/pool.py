@@ -7,7 +7,7 @@
 
 背压模型：每个 op 的「在跑 + 排队」名额固定为 QUEUE_SLOTS_PER_OP。
 一张卡同一时刻仍只跑 1 个推理（worker 逐个取队列）；多余请求先排队。
-队列满了才 429，避免「第二请求立刻 saturated」。
+名额已满时再等 SLOT_WAIT_SECONDS，等到空位就接上，到点仍满才 429。
 """
 from __future__ import annotations
 
@@ -44,6 +44,8 @@ GPU_ASSIGNMENT: dict[str, list[int]] = {
 # 每个 op「在跑 + 排队」的任务上限，与卡数无关。
 # 2 张卡时相当于每卡 6 个，3 张卡时相当于每卡 4 个，1 张卡时 12 个都堆在这一张上。
 QUEUE_SLOTS_PER_OP = 12
+# 名额已满时，最多再等这么久让出空位，而不是立刻 429。
+SLOT_WAIT_SECONDS = 60.0
 
 
 @dataclass
@@ -126,8 +128,8 @@ class WorkerPool:
         task.task_id = f"{op}-{uuid.uuid4().hex[:12]}"
         pending = _Pending(Future(), threading.Event(), time.time())
 
-        if not self._slots[op].acquire(blocking=False):
-            # 队列（在跑+等待）已满：让客户端退避；未满则入队等待空闲 GPU
+        if not self._slots[op].acquire(timeout=SLOT_WAIT_SECONDS):
+            # 等了一分钟仍没有空位：让客户端退避
             raise QueueFull(f"{op} is saturated", retry_after=10)
 
         with self._lock:
