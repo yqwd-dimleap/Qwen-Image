@@ -7,9 +7,37 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from errors import QueueFull
-from pool import QUEUE_SLOTS_PER_OP, WorkerPool
+from errors import QueueFull, ServiceError
+from pool import DEFAULT_GPU_ASSIGNMENT, QUEUE_SLOTS_PER_OP, WorkerPool
 from protocol import Task
+
+
+def test_default_gpu_assignment_is_z_image_turbo_only():
+    assert DEFAULT_GPU_ASSIGNMENT == {
+        "t2i": [],
+        "edit": [],
+        "z_image": [],
+        "z_image_turbo": [0, 1, 2, 3, 4, 5, 6, 7],
+    }
+
+
+def test_pool_drops_ops_with_no_gpus(monkeypatch):
+    monkeypatch.setattr("pool.get_context", lambda *a, **k: _Ctx())
+    pool = WorkerPool(
+        {
+            "t2i": [],
+            "edit": [],
+            "z_image": [],
+            "z_image_turbo": [0, 1, 2, 3, 4, 5, 6, 7],
+        }
+    )
+    try:
+        assert list(pool.assignment) == ["z_image_turbo"]
+        assert pool.assignment["z_image_turbo"] == list(range(8))
+        with pytest.raises(ServiceError, match="no worker for op"):
+            pool.submit(_task())
+    finally:
+        pool.close()
 
 
 class _MemQueue:

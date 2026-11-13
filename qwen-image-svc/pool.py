@@ -1,9 +1,8 @@
 """进程池与路由：op -> 专职 GPU。
 
 核心约束：worker 按 op 固定分配，不共享。
-两个 pipeline 各约 60 GiB，一张 80 GiB 卡装不下两份，所以卡是
-"专职"的：GPU0 -> t2i only，GPU1 -> edit only。副作用是好的：
-一张卡被编辑任务占满时，文生图完全不受影响，不需要任何抢占逻辑。
+一张卡同一时刻只挂一个 pipeline；默认全部 8 张卡给 z_image_turbo，
+其余 op 默认不分配（空列表会在启动时摘掉，请求直接 no worker）。
 
 背压模型：每个 op 的「在跑 + 排队」名额固定为 QUEUE_SLOTS_PER_OP。
 一张卡同一时刻仍只跑 1 个推理（worker 逐个取队列）；多余请求先排队。
@@ -33,12 +32,22 @@ def _parse_gpus(env_name: str, default: list[int]) -> list[int]:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
 
-# op -> 分配到的 GPU 编号。可用环境变量覆盖。
+# 默认：z_image_turbo 占满 8 张卡，其他模型下线。可用环境变量覆盖。
+DEFAULT_GPU_ASSIGNMENT: dict[str, list[int]] = {
+    "t2i": [],
+    "edit": [],
+    "z_image": [],
+    "z_image_turbo": [0, 1, 2, 3, 4, 5, 6, 7],
+}
+
+# op -> 分配到的 GPU 编号。空列表表示该 op 不启动。
 GPU_ASSIGNMENT: dict[str, list[int]] = {
-    "t2i": _parse_gpus("T2I_GPUS", [0, 1]),
-    "edit": _parse_gpus("EDIT_GPUS", [2, 3, 6]),
-    "z_image": _parse_gpus("Z_IMAGE_GPUS", [4, 5]),
-    "z_image_turbo": _parse_gpus("Z_IMAGE_TURBO_GPUS", [7]),
+    "t2i": _parse_gpus("T2I_GPUS", DEFAULT_GPU_ASSIGNMENT["t2i"]),
+    "edit": _parse_gpus("EDIT_GPUS", DEFAULT_GPU_ASSIGNMENT["edit"]),
+    "z_image": _parse_gpus("Z_IMAGE_GPUS", DEFAULT_GPU_ASSIGNMENT["z_image"]),
+    "z_image_turbo": _parse_gpus(
+        "Z_IMAGE_TURBO_GPUS", DEFAULT_GPU_ASSIGNMENT["z_image_turbo"]
+    ),
 }
 
 # 每个 op「在跑 + 排队」的任务上限，与卡数无关。
@@ -57,7 +66,9 @@ class _Pending:
 
 class WorkerPool:
     def __init__(self, assignment: dict[str, list[int]] | None = None) -> None:
-        self.assignment = assignment or GPU_ASSIGNMENT
+        raw = assignment if assignment is not None else GPU_ASSIGNMENT
+        # 没挂卡的 op 直接摘掉，避免 /readyz 永远等 loading、请求进队无人消费。
+        self.assignment = {op: list(gpus) for op, gpus in raw.items() if gpus}
         # spawn 而非 fork：CUDA 上下文不能跨 fork 继承。
         # 注意用标准库 multiprocessing 而非 torch.multiprocessing ——
         # 我们把 Task/Result 都设计成基础类型 + bytes，不需要 torch 的
@@ -68,7 +79,7 @@ class WorkerPool:
 
         self._task_q = {
             op: self._ctx.Queue(maxsize=QUEUE_SLOTS_PER_OP)
-            for op, gpus in self.assignment.items()
+            for op in self.assignment
         }
         # 与队列容量对齐：满员前允许入队等待，而不是按卡数瞬间拒掉。
         self._slots = {
