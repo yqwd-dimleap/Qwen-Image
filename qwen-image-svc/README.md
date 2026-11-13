@@ -5,7 +5,7 @@
 
 ## 部署机器要求
 
-- 2 × 80 GiB NVIDIA 卡（A100/H100 级别）
+- 8 × 80 GiB NVIDIA 卡（A100/H100 级别）
 - Python ≥ 3.10
 - **uvicorn 必须单进程**：`--workers 1`。GPU 池是 API 进程的子进程，多开会重复加载权重。
 
@@ -16,27 +16,29 @@ export SVC_TOKEN=$(openssl rand -hex 32)
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-API 启动后立即监听，权重在 worker 子进程中异步加载；两个 worker 都 ready 前，`/readyz` 返回 503。
+API 启动后立即监听，权重在 worker 子进程中异步加载；全部 worker ready 前，`/readyz` 返回 503。
 
 ## GPU 分配
 
+默认只上线 `z_image_turbo`，占满 8 张卡；`t2i` / `edit` / `z_image` 默认下线（无 worker，请求会报 no worker）。
+
 | GPU | op | 默认本地权重 |
 |---|---|---|
-| 0, 1 | t2i | `/data/models/Qwen-Image-2512` |
-| 2, 3, 6 | edit | `/data/models/Qwen-Image-Edit-2511` |
-| 4, 5 | z_image | `/data/models/Z-Image` |
-| 7 | z_image_turbo | `/data/models/Z-Image-Turbo` |
+| 0–7 | z_image_turbo | `/data/models/Z-Image-Turbo` |
+| （无） | t2i / edit / z_image | 默认不启动 |
 
 权重只读本地目录（`local_files_only=True`，不会上网下载）。可用环境变量覆盖卡位与路径：
 
 ```bash
-export T2I_GPUS=0,1
-export EDIT_GPUS=2,3,6
-export Z_IMAGE_GPUS=4,5
-export Z_IMAGE_TURBO_GPUS=7
+export Z_IMAGE_TURBO_GPUS=0,1,2,3,4,5,6,7
+# 需要重新上线其他模型时再分配卡，例如：
+# export T2I_GPUS=0,1
+# export EDIT_GPUS=2,3
+# export Z_IMAGE_GPUS=4,5
+# export Z_IMAGE_TURBO_GPUS=6,7
 
 # 仅当目录不在默认位置时才需要改
-# export T2I_REPO=/data/models/Qwen-Image-2512
+# export Z_IMAGE_TURBO_REPO=/data/models/Z-Image-Turbo
 ```
 
 ## DashScope 兼容接口
@@ -184,7 +186,7 @@ curl -X DELETE "http://127.0.0.1:8000/jobs/$JOB" \
 ## 运维接口
 
 - `GET /healthz`：进程存活检查
-- `GET /readyz`：两个模型是否完成加载
+- `GET /readyz`：已分配 GPU 的模型是否完成加载
 - `GET /metrics`：worker ready 状态和队列深度
 
 ## 参数与错误
