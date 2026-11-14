@@ -146,13 +146,16 @@ class ModelHost:
                 images=_encode_outputs(images),
                 elapsed_ms=int((time.monotonic() - started) * 1000),
             )
-        except Exception as exc:  # noqa: BLE001 —— worker 绝不能因单任务异常退出
-            return Result(
+        except Exception as exc:  # noqa: BLE001 —— 普通业务错误返回 Result；CUDA 致命错要退出进程
+            result = Result(
                 ok=False,
                 task_id=task.task_id,
                 error=f"{type(exc).__name__}: {exc}",
                 elapsed_ms=int((time.monotonic() - started) * 1000),
             )
+            if is_fatal_accelerator_error(exc):
+                raise FatalAcceleratorError(result) from exc
+            return result
 
     def _generate(self, task: Task) -> list[Any]:
         # num_images_per_prompt 仍按请求保留；为控制显存，实际逐张执行。
@@ -248,5 +251,10 @@ def worker_main(op: str, gpu_id: int, task_q, event_q, stop_evt) -> None:
         # started 事件让 pool 能区分「排队中」和「已在 GPU 上跑」，
         # 两段超时预算靠它切分。
         event_q.put(WorkerEvent(kind="started", op=op, task_id=task.task_id))
-        result = host.run(task)
+        try:
+            result = host.run(task)
+        except FatalAcceleratorError as fatal:
+            # 先回报这次失败，再自杀；supervisor 会拉起带干净 CUDA 上下文的新进程。
+            event_q.put(WorkerEvent(kind="result", op=op, result=fatal.result))
+            raise SystemExit(1) from fatal
         event_q.put(WorkerEvent(kind="result", op=op, result=result))

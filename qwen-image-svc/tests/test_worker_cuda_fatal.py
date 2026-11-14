@@ -3,7 +3,23 @@ from __future__ import annotations
 
 import pytest
 
-from worker import is_fatal_accelerator_error
+from protocol import Result, Task
+from worker import FatalAcceleratorError, ModelHost, is_fatal_accelerator_error
+
+
+def make_task(op: str = "z_image_turbo") -> Task:
+    return Task(
+        op=op,
+        prompt="家庭教师",
+        negative_prompt=" ",
+        width=1584,
+        height=1056,
+        seed=1,
+        true_cfg_scale=0.0,
+        guidance_scale=0.0,
+        num_inference_steps=8,
+        num_images_per_prompt=1,
+    )
 
 
 @pytest.mark.parametrize(
@@ -34,3 +50,35 @@ def test_cuda_like_errors_are_fatal(exc):
 )
 def test_ordinary_errors_are_not_fatal(exc):
     assert is_fatal_accelerator_error(exc) is False
+
+
+def test_run_raises_fatal_accelerator_error_for_cuda_failure(monkeypatch):
+    monkeypatch.setenv("SVC_FAKE", "1")
+    host = ModelHost("z_image_turbo", gpu_id=0)
+
+    def boom(_task):
+        raise RuntimeError("CUDA error: unspecified launch failure")
+
+    monkeypatch.setattr(host, "_fake_generate", boom)
+
+    with pytest.raises(FatalAcceleratorError) as caught:
+        host.run(make_task())
+
+    result = caught.value.result
+    assert result.ok is False
+    assert "CUDA" in (result.error or "")
+
+
+def test_run_returns_result_for_ordinary_failure(monkeypatch):
+    monkeypatch.setenv("SVC_FAKE", "1")
+    host = ModelHost("z_image_turbo", gpu_id=0)
+
+    def boom(_task):
+        raise ValueError("bad prompt")
+
+    monkeypatch.setattr(host, "_fake_generate", boom)
+
+    result = host.run(make_task())
+    assert isinstance(result, Result)
+    assert result.ok is False
+    assert "bad prompt" in (result.error or "")
