@@ -18,6 +18,33 @@ from typing import Any
 
 from protocol import Result, Task, WorkerEvent
 
+# CUDA 上下文一旦报这类错，通常已不可恢复；继续接请求只会反复 InternalError。
+_FATAL_EXC_NAME_MARKERS = ("AcceleratorError", "CUDAError", "OutOfMemoryError")
+_FATAL_MSG_MARKERS = (
+    "cuda error",
+    "cuda out of memory",
+    "cudaerror",
+    "unspecified launch failure",
+    "acceleratorerror",
+)
+
+
+class FatalAcceleratorError(Exception):
+    """GPU 已不可信：先把 Result 交给调用方上报，再退出进程让 supervisor 重启。"""
+
+    def __init__(self, result: Result) -> None:
+        self.result = result
+        super().__init__(result.error or "fatal accelerator error")
+
+
+def is_fatal_accelerator_error(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if any(marker in name for marker in _FATAL_EXC_NAME_MARKERS):
+        return True
+    text = f"{name}: {exc}".lower()
+    return any(marker in text for marker in _FATAL_MSG_MARKERS)
+
+
 # op -> (本地权重目录, pipeline 类名)。默认读 /data/models，不走 HuggingFace 下载。
 # 仍可用 T2I_REPO / EDIT_REPO / Z_IMAGE_REPO / Z_IMAGE_TURBO_REPO 覆盖。
 MODEL_REGISTRY = {
