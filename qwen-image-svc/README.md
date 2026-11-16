@@ -189,6 +189,8 @@ curl -X DELETE "http://127.0.0.1:8000/jobs/$JOB" \
 - `GET /readyz`：已分配 GPU 的模型是否完成加载
 - `GET /metrics`：worker ready 状态和队列深度
 
+进程内 `readyz` 看门狗默认每 20 分钟探测一次 ready 快照；非 ready 时发飞书文本告警。默认关闭；开启需同时设置 `FEISHU_NOTIFY_ENABLED=1` 和本服务自己的 `FEISHU_WEBHOOK_URL`。可选：`READYZ_ALERT_INTERVAL_SECONDS`（秒，覆盖默认 1200）。
+
 ## 参数与错误
 
 请求额外字段会被拒绝，避免悄悄接受 OpenAI 兼容参数。有效的原生字段包括：
