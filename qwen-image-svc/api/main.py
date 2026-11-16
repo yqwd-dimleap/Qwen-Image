@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import secrets
@@ -35,6 +36,7 @@ from qwen_image_dashscope import (
     from_job as dashscope_response,
     to_task as dashscope_task,
 )
+from readyz_watchdog import cancel_watchdog, run_readyz_watchdog
 
 AUTH_TOKEN = os.environ.get("SVC_TOKEN", "")
 DATA_DIR = os.environ.get("SVC_DATA_DIR", "./data")
@@ -63,8 +65,14 @@ async def lifespan(app: FastAPI):
         infer_timeout=INFER_TIMEOUT,
         ttl_seconds=JOB_TTL,
     )
+    # 周期性探测 ready；非 ready 时发飞书（默认关闭，FEISHU_NOTIFY_ENABLED=1 开启）。
+    watchdog = asyncio.create_task(
+        run_readyz_watchdog(lambda: app.state.pool.ready_snapshot()),
+        name="readyz-watchdog",
+    )
     # 模型在 worker 子进程中异步加载，/readyz 负责表达是否可以接流量。
     yield
+    await cancel_watchdog(watchdog)
     app.state.jobs.close()
     pool.close()
     blobs.close()
