@@ -1,8 +1,8 @@
 """进程池与路由：op -> 专职 GPU。
 
 核心约束：worker 按 op 固定分配，不共享。
-一张卡同一时刻只挂一个 pipeline；默认全部 8 张卡给 z_image_turbo，
-其余 op 默认不分配（空列表会在启动时摘掉，请求直接 no worker）。
+一张卡同一时刻只挂一个 pipeline；默认 z_image_turbo 占 0–2，
+edit 占 3–7，其余 op 默认不分配（空列表会在启动时摘掉，请求直接 no worker）。
 
 背压模型：每个 op 的「在跑 + 排队」名额固定为 QUEUE_SLOTS_PER_OP。
 一张卡同一时刻仍只跑 1 个推理（worker 逐个取队列）；多余请求先排队。
@@ -32,12 +32,12 @@ def _parse_gpus(env_name: str, default: list[int]) -> list[int]:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
 
-# 默认：z_image_turbo 占满 8 张卡，其他模型下线。可用环境变量覆盖。
+# 默认：z_image_turbo 占 0–2，edit 占 3–7；其余下线。可用环境变量覆盖。
 DEFAULT_GPU_ASSIGNMENT: dict[str, list[int]] = {
     "t2i": [],
-    "edit": [],
+    "edit": [3, 4, 5, 6, 7],
     "z_image": [],
-    "z_image_turbo": [0, 1, 2, 3, 4, 5, 6, 7],
+    "z_image_turbo": [0, 1, 2],
 }
 
 # op -> 分配到的 GPU 编号。空列表表示该 op 不启动。
