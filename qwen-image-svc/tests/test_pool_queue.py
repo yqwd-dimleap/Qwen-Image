@@ -12,12 +12,12 @@ from pool import DEFAULT_GPU_ASSIGNMENT, QUEUE_SLOTS_PER_OP, WorkerPool
 from protocol import Task
 
 
-def test_default_gpu_assignment_is_z_image_turbo_only():
+def test_default_gpu_assignment_is_turbo_and_edit():
     assert DEFAULT_GPU_ASSIGNMENT == {
         "t2i": [],
-        "edit": [],
+        "edit": [3, 4, 5, 6, 7],
         "z_image": [],
-        "z_image_turbo": [0, 1, 2, 3, 4, 5, 6, 7],
+        "z_image_turbo": [0, 1, 2],
     }
 
 
